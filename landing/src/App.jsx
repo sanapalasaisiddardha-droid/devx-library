@@ -29,7 +29,11 @@ export default function App() {
     try { localStorage.setItem("siddlib.lastBook", String(book.id)); } catch { /* ignore */ }
     const ext = extOf(book.pdf);
     if (ext === "pdf" || TEXT_EXTS.has(ext)) {
-      setLoading(book); // → reader / code viewer after the loading animation
+      // mount the viewer IMMEDIATELY (hidden under the loading overlay) so the
+      // file starts downloading while the card animation plays
+      setLoading(book);
+      if (ext === "pdf") setReader(book);
+      else setCodeBook(book);
     } else {
       // formats the browser can't render (djvu, ppt): download directly —
       // no window.open, so nothing for the popup blocker to kill
@@ -42,7 +46,13 @@ export default function App() {
     }
   }, []);
 
-  // any pick (map pin or sidebar) → fly there, open on arrival
+  // map poster click → the user is already there; open right away while gliding in
+  const onPosterClick = useCallback((book) => {
+    setFlyTo({ book, open: false, ts: Date.now() });
+    beginOpen(book);
+  }, [beginOpen]);
+
+  // sidebar pick → cinematic flight first, open on arrival
   const onPickBook = useCallback((book) => {
     setFlyTo({ book, open: true, ts: Date.now() });
   }, []);
@@ -51,20 +61,11 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
-      <MapView flyTo={flyTo} onPickBook={onPickBook} onArrived={onArrived} />
+      <MapView flyTo={flyTo} onPickBook={onPosterClick} onArrived={onArrived} />
       <Sidebar onPickBook={onPickBook} />
 
       <AnimatePresence>
-        {loading && (
-          <LoadingCards
-            book={loading}
-            onDone={() => {
-              if (extOf(loading.pdf) === "pdf") setReader(loading);
-              else setCodeBook(loading);
-              setLoading(null);
-            }}
-          />
-        )}
+        {loading && <LoadingCards book={loading} onDone={() => setLoading(null)} />}
       </AnimatePresence>
 
       <AnimatePresence>

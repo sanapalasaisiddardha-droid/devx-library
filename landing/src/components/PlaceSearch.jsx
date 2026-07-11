@@ -87,7 +87,7 @@ export default function PlaceSearch({ onGo }) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.16 }}
-            className="mt-2 overflow-hidden rounded-xl border border-white/12 bg-ink/95 shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+            className="sidebar-scroll mt-2 max-h-80 overflow-y-auto rounded-xl border border-white/12 bg-ink/95 shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
           >
             {results.map((r, i) => (
               <li key={`${r.name}${i}`}>

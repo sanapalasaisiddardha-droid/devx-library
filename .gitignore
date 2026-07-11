@@ -38,3 +38,5 @@ landing/code-flow.mjs
 landing/fix-covers.sh
 landing/diag.mjs
 landing/pdfs.txt
+landing/side-shot.mjs
+landing/live-flow.mjs

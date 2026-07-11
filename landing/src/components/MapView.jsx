@@ -141,6 +141,22 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
       } else {
         map.flyTo({ center: [10, 30], zoom: 2.2, speed: 0.4 });
       }
+
+      // ask for the visitor's location — when granted, fly home & drop a pin
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const here = [pos.coords.longitude, pos.coords.latitude];
+            const el = document.createElement("div");
+            el.className = "you-pin";
+            el.title = "You are here";
+            new maplibregl.Marker({ element: el }).setLngLat(here).addTo(map);
+            map.flyTo({ center: here, zoom: 10.5, pitch: 40, bearing: 0, speed: 1.1, curve: 1.7, essential: true });
+          },
+          () => { /* denied/unavailable → keep the intro view */ },
+          { timeout: 8000, maximumAge: 600000 }
+        );
+      }
     });
 
     return () => map.remove();
@@ -169,7 +185,12 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
           mapRef.current?.flyTo({ center, zoom: 13.5, pitch: 45, bearing: 0, speed: 1.7, curve: 1.5, essential: true })
         }
       />
-      <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/10 bg-ink/75 px-4 py-2 text-xs font-medium text-white/65 backdrop-blur-md">
+      {/* soft vignette so the map sinks into the UI */}
+      <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_140px_50px_rgba(7,6,13,0.55)]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-ink/50 to-transparent" />
+
+      <div className="pointer-events-none absolute bottom-5 left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-ink/80 px-4 py-2 text-xs font-medium text-white/70 shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+        <span className="h-1.5 w-1.5 rounded-full bg-lime shadow-[0_0_8px_2px_rgba(195,239,62,0.6)]" />
         {hint}
       </div>
     </div>

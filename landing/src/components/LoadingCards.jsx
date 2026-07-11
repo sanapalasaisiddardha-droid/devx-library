@@ -17,7 +17,7 @@ export default function LoadingCards({ book, onDone }) {
   }, [book]);
 
   useEffect(() => {
-    const t = setTimeout(onDone, 1700);
+    const t = setTimeout(onDone, 1250);
     return () => clearTimeout(t);
   }, [onDone]);
 
@@ -27,7 +27,7 @@ export default function LoadingCards({ book, onDone }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.3 }}
-      className="fixed inset-0 z-[90] flex flex-col items-center justify-center bg-ink/95 backdrop-blur-xl"
+      className="fixed inset-0 z-[130] flex flex-col items-center justify-center bg-ink/95 backdrop-blur-xl"
     >
       {/* straight line of cards */}
       <div className="flex items-end gap-4 px-6">

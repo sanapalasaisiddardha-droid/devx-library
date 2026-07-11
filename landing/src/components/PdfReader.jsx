@@ -204,7 +204,7 @@ export default function PdfReader({ book, onClose }) {
               <h3 className="font-display text-sm font-semibold">Your highlights</h3>
               <span className="text-xs text-white/40">{notes.length}</span>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+            <div className="sidebar-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-4">
               {notes.length === 0 ? (
                 <p className="mt-8 px-2 text-center text-sm text-white/40">
                   Select any text in the PDF to highlight it or add a note. Everything is saved in your browser.
