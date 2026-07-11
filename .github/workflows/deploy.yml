@@ -27,14 +27,23 @@ jobs:
       - name: Install
         working-directory: landing
         run: npm ci
-      - name: Point books at the GitHub release
+      # Books are served same-origin from the site (release assets send no CORS
+      # headers, so the in-app reader can't fetch them cross-origin).
+      - name: Point books at same-origin /books/
         working-directory: landing
         run: node gen-data.mjs
         env:
-          PDF_BASE: https://github.com/sanapalasaisiddardha-droid/devx-library/releases/download/books-v1/
+          PDF_BASE: books/
       - name: Build
         working-directory: landing
         run: npm run build
+      - name: Bundle book files from the release into the site
+        run: |
+          mkdir -p landing/dist/books
+          gh release download books-v1 --repo ${{ github.repository }} --dir landing/dist/books
+          ls landing/dist/books | wc -l
+        env:
+          GH_TOKEN: ${{ github.token }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: landing/dist
