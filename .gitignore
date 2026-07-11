@@ -1,0 +1,40 @@
+# dependencies / build
+node_modules/
+dist/
+
+# book files — published as GitHub release assets, not committed (see stage-books.mjs)
+_staging/
+*.pdf
+*.djvu
+*.ppt
+Computer Graphics/
+Cryptography and network security/
+Discrete/
+image processing/
+Machine learning (dawood sir)/
+Project study material/
+Qt programming/
+System programming/
+Theory of computation and complexity theory/
+UnixShellScripts/
+Wireless and Mobile communication/
+
+# old prototype site at the repo root (superseded by landing/)
+/index.html
+/app.js
+/styles.css
+/covers/
+
+# local scratch
+_refvideo/
+landing/*.png
+landing/shot.mjs
+landing/reader-shot.mjs
+landing/region-shot.mjs
+landing/marker-diag.mjs
+landing/hero-click.mjs
+landing/city-flow.mjs
+landing/code-flow.mjs
+landing/fix-covers.sh
+landing/diag.mjs
+landing/pdfs.txt
