@@ -5,6 +5,47 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { styleUrl, LANDMARKS, BOOK_PINS, pinFor, landmarkCount } from "../lib/geo";
 import PlaceSearch from "./PlaceSearch";
 
+/* ---------- flight path helpers (Indiana-Jones style takeoff → landing) ---------- */
+const RAD = Math.PI / 180;
+
+function haversineKm(a, b) {
+  const dLat = (b[1] - a[1]) * RAD, dLng = (b[0] - a[0]) * RAD;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * RAD) * Math.cos(b[1] * RAD) * Math.sin(dLng / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(s));
+}
+
+function bearingDeg(a, b) {
+  const φ1 = a[1] * RAD, φ2 = b[1] * RAD, dλ = (b[0] - a[0]) * RAD;
+  const y = Math.sin(dλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dλ);
+  return (Math.atan2(y, x) / RAD + 360) % 360;
+}
+
+const EMPTY_LINE = { type: "Feature", geometry: { type: "LineString", coordinates: [] } };
+
+function ensureFlightLayers(map) {
+  if (!map.getSource("devx-flight")) {
+    map.addSource("devx-flight", { type: "geojson", data: EMPTY_LINE });
+    map.addLayer({
+      id: "devx-flight-glow", source: "devx-flight", type: "line",
+      paint: { "line-color": "#c3ef3e", "line-width": 7, "line-opacity": 0.22, "line-blur": 4 },
+    });
+    map.addLayer({
+      id: "devx-flight-line", source: "devx-flight", type: "line",
+      paint: { "line-color": "#c3ef3e", "line-width": 2.2, "line-opacity": 0.9, "line-dasharray": [0.4, 1.6] },
+    });
+  }
+}
+
+function planeEl() {
+  const el = document.createElement("div");
+  el.className = "plane-pin";
+  el.innerHTML = `<svg viewBox="0 0 24 24" fill="#ffffff" stroke="#0e0c16" stroke-width="0.6">
+    <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>
+  </svg>`;
+  return el;
+}
+
 // real 3D buildings — must be re-added after every setStyle() (style switches wipe custom layers)
 function add3dBuildings(map, theme) {
   try {
@@ -77,11 +118,53 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     try { return localStorage.getItem("siddlib.mapTheme") || "dark"; } catch { return "dark"; }
   });
   const [travel, setTravel] = useState(null); // destination label while the camera flies
+  const flightRef = useRef(null); // cleanup fn of the active plane animation
 
-  // programmatic flight with the travel banner + pulse overlay
+  // Plane rides the camera: on every camera move it sits at the screen centre
+  // with the flown trail accumulating behind it. Perfectly synced with any
+  // flight duration/easing, and always visible — pure movie travel-map.
+  const startFlight = (map) => {
+    flightRef.current?.(); // cancel a previous flight
+    try { ensureFlightLayers(map); } catch { return; }
+    const start = map.getCenter();
+    const trail = [[start.lng, start.lat]];
+    const marker = new maplibregl.Marker({ element: planeEl(), rotationAlignment: "map", pitchAlignment: "map" })
+      .setLngLat(start)
+      .addTo(map);
+    const onMove = () => {
+      const c = map.getCenter();
+      const prev = trail[trail.length - 1];
+      let lng = c.lng; // unwrap so the trail never jumps across ±180°
+      while (lng - prev[0] > 180) lng -= 360;
+      while (lng - prev[0] < -180) lng += 360;
+      const here = [lng, c.lat];
+      if (haversineKm(prev, here) < 0.5) return;
+      trail.push(here);
+      try {
+        marker.setLngLat(here);
+        marker.setRotation(bearingDeg(prev, here));
+        map.getSource("devx-flight")?.setData({ type: "Feature", geometry: { type: "LineString", coordinates: trail } });
+      } catch { /* style switched mid-flight */ }
+    };
+    const cleanup = () => {
+      map.off("move", onMove);
+      marker.remove();
+      if (flightRef.current === cleanup) flightRef.current = null;
+      setTimeout(() => { try { map.getSource("devx-flight")?.setData(EMPTY_LINE); } catch { /* ignore */ } }, 1400);
+    };
+    flightRef.current = cleanup;
+    map.on("move", onMove);
+    map.once("moveend", cleanup);
+  };
+
+  // programmatic flight: travel banner + warp pulse + plane takeoff for long hops
   const cinematicFly = (opts, label) => {
     const map = mapRef.current;
     if (!map) return;
+    const c = map.getCenter();
+    const from = [c.lng, c.lat];
+    const to = Array.isArray(opts.center) ? opts.center : [opts.center.lng, opts.center.lat];
+    if (haversineKm(from, to) > 300) startFlight(map);
     if (label) setTravel(label);
     map.flyTo({ essential: true, ...opts });
     map.once("moveend", () => setTravel(null));
@@ -204,14 +287,14 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     if (!flyTo || !map) return;
     const pin = pinFor(flyTo.book.id);
     if (!pin) { onArrived?.(flyTo.book); return; }
-    setTravel(`${pin.landmark.name} · ${pin.landmark.place}`);
-    map.flyTo({ center: pin.lngLat, zoom: 16.2, pitch: 60, bearing: -20, speed: 1.7, curve: 1.6, essential: true });
-    const done = () => {
-      setTravel(null);
-      if (flyTo.open) onArrived?.(flyTo.book);
-    };
+    cinematicFly(
+      { center: pin.lngLat, zoom: 16.2, pitch: 60, bearing: -20, speed: 1.7, curve: 1.6 },
+      `${pin.landmark.name} · ${pin.landmark.place}`
+    );
+    const done = () => { if (flyTo.open) onArrived?.(flyTo.book); };
     map.once("moveend", done);
     return () => map.off("moveend", done);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flyTo, onArrived]);
 
   return (
