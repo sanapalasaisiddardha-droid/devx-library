@@ -25,13 +25,41 @@ const EMPTY_LINE = { type: "Feature", geometry: { type: "LineString", coordinate
 const EMPTY_FC = { type: "FeatureCollection", features: [] };
 
 /* ---------- live air traffic (community ADS-B: airplanes.live + adsb.lol) ---------- */
-const TRAFFIC_ZOOM = 5.5; // fetch only at region scale — the API is radius-based
+const TRAFFIC_ZOOM = 5.5; // above: query around the camera · below: global hub sweep
 // tried in order — airplanes.live sends CORS natively; adsb.lol needs a relay
 const TRAFFIC_SOURCES = [
   (lat, lng) => `https://api.airplanes.live/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250`,
   (lat, lng) =>
     "https://corsproxy.io/?url=" +
     encodeURIComponent(`https://api.adsb.lol/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250`),
+];
+
+// world-sweep sample points: the planet's busiest air corridors, every continent.
+// Each covers a 250 nm radius; queried one per second to respect API limits.
+const WORLD_HUBS = [
+  [-73.9, 40.7],    // New York
+  [-84.4, 33.7],    // Atlanta
+  [-87.9, 41.9],    // Chicago
+  [-97.0, 32.9],    // Dallas
+  [-118.4, 33.9],   // Los Angeles
+  [-99.1, 19.4],    // Mexico City
+  [-46.6, -23.5],   // São Paulo
+  [-74.1, 4.7],     // Bogotá
+  [-0.45, 51.47],   // London
+  [8.57, 50.03],    // Frankfurt
+  [-3.57, 40.49],   // Madrid
+  [28.75, 41.28],   // Istanbul
+  [37.6, 55.75],    // Moscow
+  [55.36, 25.25],   // Dubai
+  [31.4, 30.12],    // Cairo
+  [28.24, -26.13],  // Johannesburg
+  [77.1, 28.55],    // Delhi
+  [72.87, 19.09],   // Mumbai
+  [103.99, 1.36],   // Singapore
+  [114.0, 22.4],    // Hong Kong / Shenzhen
+  [116.6, 40.07],   // Beijing
+  [139.78, 35.55],  // Tokyo
+  [151.18, -33.95], // Sydney
 ];
 
 function addPlaneIcon(map) {
@@ -60,7 +88,7 @@ function ensureTrafficLayer(map) {
       type: "symbol",
       layout: {
         "icon-image": "devx-live-plane",
-        "icon-size": 0.5,
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.3, 6, 0.5, 11, 0.65],
         "icon-rotate": ["get", "track"],
         "icon-rotation-alignment": "map",
         "icon-allow-overlap": true,
@@ -345,43 +373,79 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- live air traffic: fetch nearby aircraft every 10s at region zoom ----
+  // ---- live air traffic ----
+  // zoomed in (≥ TRAFFIC_ZOOM): 250 nm around the camera, every 10 s
+  // zoomed out: rolling sweep across WORLD_HUBS (1 req/s) → planes everywhere
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     let stop = false;
+    let sweeping = false;
+    let lastSweep = 0;
+    const worldCache = new Map(); // hex → { feature, ts }
+
     const clear = () => { try { map.getSource("devx-traffic")?.setData(EMPTY_FC); } catch { /* ignore */ } };
-    const tick = async () => {
-      if (stop || !liveFlights) return;
-      if (document.hidden || !map.isStyleLoaded() || map.getZoom() < TRAFFIC_ZOOM) { clear(); return; }
-      const c = map.getCenter();
+    const acToFeature = (a) => ({
+      type: "Feature",
+      properties: {
+        callsign: (a.flight || a.r || a.hex || "").trim(),
+        track: a.track ?? a.true_heading ?? 0,
+        alt: a.alt_baro ?? "",
+        gs: Math.round(a.gs || 0),
+        t: a.t || "",
+      },
+      geometry: { type: "Point", coordinates: [a.lon, a.lat] },
+    });
+    const fetchPoint = async (lat, lng) => {
+      for (const src of TRAFFIC_SOURCES) {
+        try {
+          const r = await fetch(src(lat, lng));
+          if (r.ok) return (await r.json()).ac || [];
+        } catch { /* try the next source */ }
+      }
+      return [];
+    };
+    const setData = (features) => {
+      if (stop) return;
       try {
-        let d = null;
-        for (const src of TRAFFIC_SOURCES) {
-          try {
-            const r = await fetch(src(c.lat, c.lng));
-            if (r.ok) { d = await r.json(); break; }
-          } catch { /* try the next source */ }
-        }
-        if (!d) return;
-        const features = (d.ac || [])
-          .filter((a) => a.lat != null && a.lon != null)
-          .map((a) => ({
-            type: "Feature",
-            properties: {
-              callsign: (a.flight || a.r || a.hex || "").trim(),
-              track: a.track ?? a.true_heading ?? 0,
-              alt: a.alt_baro ?? "",
-              gs: Math.round(a.gs || 0),
-              t: a.t || "",
-            },
-            geometry: { type: "Point", coordinates: [a.lon, a.lat] },
-          }));
-        if (stop || !liveFlights) return;
         ensureTrafficLayer(map);
         map.getSource("devx-traffic")?.setData({ type: "FeatureCollection", features });
-      } catch { /* relay hiccup — try again next tick */ }
+      } catch { /* style mid-switch */ }
     };
+
+    const localTick = async () => {
+      const c = map.getCenter();
+      const ac = await fetchPoint(c.lat, c.lng);
+      if (!stop && liveFlights && map.getZoom() >= TRAFFIC_ZOOM) {
+        setData(ac.filter((a) => a.lat != null && a.lon != null).map(acToFeature));
+      }
+    };
+
+    const worldSweep = async () => {
+      if (sweeping) return;
+      sweeping = true;
+      for (const [lng, lat] of WORLD_HUBS) {
+        if (stop || !liveFlights || document.hidden || map.getZoom() >= TRAFFIC_ZOOM) break;
+        const ac = await fetchPoint(lat, lng);
+        const now = Date.now();
+        ac.forEach((a) => {
+          if (a.lat != null && a.lon != null && a.hex) worldCache.set(a.hex, { f: acToFeature(a), ts: now });
+        });
+        for (const [hex, v] of worldCache) if (now - v.ts > 240000) worldCache.delete(hex); // prune stale
+        setData([...worldCache.values()].map((v) => v.f)); // continents light up as the sweep runs
+        await new Promise((r) => setTimeout(r, 1050)); // ~1 req/s — polite to the API
+      }
+      sweeping = false;
+      lastSweep = Date.now();
+    };
+
+    const tick = () => {
+      if (stop || !liveFlights || document.hidden || !map.isStyleLoaded()) return;
+      if (map.getZoom() >= TRAFFIC_ZOOM) localTick();
+      else if (Date.now() - lastSweep > 60000) worldSweep(); // refresh the world every ~60 s
+      else setData([...worldCache.values()].map((v) => v.f));
+    };
+
     const iv = setInterval(tick, 10000);
     map.on("moveend", tick);
     if (map.isStyleLoaded()) tick(); else map.once("load", tick);
