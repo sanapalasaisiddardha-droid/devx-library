@@ -53,7 +53,7 @@ export default function PlaceSearch({ onGo }) {
     if (!r) return;
     setOpenList(false);
     setQ(r.name.split(",")[0]);
-    onGo(r.center);
+    onGo(r.center, r.name.split(",")[0]);
   };
 
   const onKey = (e) => {
@@ -65,9 +65,12 @@ export default function PlaceSearch({ onGo }) {
   };
 
   return (
-    <div ref={boxRef} className="absolute right-4 top-4 z-30 w-72">
-      <div className="relative">
-        <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <div ref={boxRef} className="relative w-80">
+      <div className="group relative">
+        <svg
+          className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/40 transition-colors group-focus-within:text-lime"
+          viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+        >
           <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
         </svg>
         <input
@@ -76,8 +79,19 @@ export default function PlaceSearch({ onGo }) {
           onFocus={() => results.length && setOpenList(true)}
           onKeyDown={onKey}
           placeholder="Search any place on Earth…"
-          className="w-full rounded-xl border border-white/12 bg-ink/85 py-2.5 pl-9 pr-3 text-sm text-white shadow-[0_16px_40px_rgba(0,0,0,0.45)] outline-none backdrop-blur-xl placeholder:text-white/35 focus:border-violet"
+          className="h-11 w-full rounded-2xl border border-white/12 bg-ink/85 pl-10 pr-10 text-sm text-white shadow-[0_16px_40px_rgba(0,0,0,0.45)] outline-none backdrop-blur-xl transition-all duration-300 placeholder:text-white/35 focus:border-violet/70 focus:bg-ink/95 focus:shadow-[0_16px_40px_rgba(0,0,0,0.45),0_0_0_3px_rgba(124,92,255,0.22)]"
         />
+        {q && (
+          <button
+            onClick={() => { setQ(""); setResults([]); setOpenList(false); }}
+            aria-label="Clear search"
+            className="absolute right-3 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full bg-white/10 text-white/50 transition hover:bg-white/20 hover:text-white"
+          >
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <AnimatePresence>
@@ -90,23 +104,36 @@ export default function PlaceSearch({ onGo }) {
             className="sidebar-scroll mt-2 max-h-80 overflow-y-auto rounded-xl border border-white/12 bg-ink/95 shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
           >
             {results.map((r, i) => (
-              <li key={`${r.name}${i}`}>
+              <motion.li
+                key={`${r.name}${i}`}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04, duration: 0.25 }}
+              >
                 <button
                   onClick={() => go(r)}
                   onMouseEnter={() => setSel(i)}
-                  className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition ${
-                    sel === i ? "bg-white/8" : ""
+                  className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors ${
+                    sel === i ? "bg-white/[0.07]" : ""
                   }`}
                 >
-                  <svg className="mt-0.5 shrink-0 text-violet-soft" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" />
-                  </svg>
+                  <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition ${sel === i ? "bg-violet/25 text-violet-soft" : "bg-white/5 text-white/40"}`}>
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" />
+                    </svg>
+                  </span>
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-medium text-white/85">{r.name}</span>
                     {r.kind && <span className="block text-[10px] capitalize text-white/40">{r.kind}</span>}
                   </span>
+                  <svg
+                    className={`ml-auto shrink-0 transition ${sel === i ? "text-lime opacity-100" : "opacity-0"}`}
+                    viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+                  >
+                    <path d="M5 12h14" /><path d="m12 5 7 7-7 7" />
+                  </svg>
                 </button>
-              </li>
+              </motion.li>
             ))}
           </motion.ul>
         )}

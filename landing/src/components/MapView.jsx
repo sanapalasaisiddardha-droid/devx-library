@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { styleUrl, LANDMARKS, BOOK_PINS, pinFor, landmarkCount } from "../lib/geo";
@@ -75,6 +76,16 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem("siddlib.mapTheme") || "dark"; } catch { return "dark"; }
   });
+  const [travel, setTravel] = useState(null); // destination label while the camera flies
+
+  // programmatic flight with the travel banner + pulse overlay
+  const cinematicFly = (opts, label) => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (label) setTravel(label);
+    map.flyTo({ essential: true, ...opts });
+    map.once("moveend", () => setTravel(null));
+  };
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -117,7 +128,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
       const count = landmarkCount(lm);
       if (!count) continue;
       const el = beaconEl(lm, count, (l) => {
-        map.flyTo({ center: l.at, zoom: 14.2, pitch: 55, bearing: -15, speed: 1.6, curve: 1.5 });
+        cinematicFly({ center: l.at, zoom: 14.2, pitch: 55, bearing: -15, speed: 1.6, curve: 1.5 }, l.name);
       });
       beacons.push(new maplibregl.Marker({ element: el }).setLngLat(lm.at).addTo(map));
     }
@@ -165,7 +176,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
         el.title = "You are here";
         new maplibregl.Marker({ element: el }).setLngLat(here).addTo(map);
         // rooftop-level landing — right down among the 3D buildings
-        map.flyTo({ center: here, zoom: 17, pitch: 62, bearing: -20, speed: 1.35, curve: 1.7, essential: true });
+        cinematicFly({ center: here, zoom: 17, pitch: 62, bearing: -20, speed: 1.35, curve: 1.7 }, "your location");
       };
 
       if (navigator.geolocation) {
@@ -193,41 +204,102 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     if (!flyTo || !map) return;
     const pin = pinFor(flyTo.book.id);
     if (!pin) { onArrived?.(flyTo.book); return; }
+    setTravel(`${pin.landmark.name} · ${pin.landmark.place}`);
     map.flyTo({ center: pin.lngLat, zoom: 16.2, pitch: 60, bearing: -20, speed: 1.7, curve: 1.6, essential: true });
-    if (flyTo.open) {
-      const done = () => onArrived?.(flyTo.book);
-      map.once("moveend", done);
-      return () => map.off("moveend", done);
-    }
+    const done = () => {
+      setTravel(null);
+      if (flyTo.open) onArrived?.(flyTo.book);
+    };
+    map.once("moveend", done);
+    return () => map.off("moveend", done);
   }, [flyTo, onArrived]);
 
   return (
     <div className="fixed inset-0 z-0">
       <div ref={wrap} className="h-full w-full" />
-      <PlaceSearch
-        onGo={(center) =>
-          mapRef.current?.flyTo({ center, zoom: 13.5, pitch: 45, bearing: 0, speed: 1.7, curve: 1.5, essential: true })
-        }
-      />
+      {/* top-right control cluster: theme toggle + place search */}
+      <div className="absolute right-4 top-4 z-30 flex items-start gap-2.5">
+        <motion.button
+          whileHover={{ scale: 1.06 }}
+          whileTap={{ scale: 0.9 }}
+          onClick={toggleTheme}
+          title={theme === "dark" ? "Switch to light map" : "Switch to dark map"}
+          aria-label="Toggle map theme"
+          className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-2xl border border-white/12 bg-ink/85 text-white/80 shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-colors hover:border-lime/60 hover:text-lime"
+        >
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={theme}
+              initial={{ rotate: -120, opacity: 0, scale: 0.4 }}
+              animate={{ rotate: 0, opacity: 1, scale: 1 }}
+              exit={{ rotate: 120, opacity: 0, scale: 0.4 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              className="grid place-items-center"
+            >
+              {theme === "dark" ? (
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+                </svg>
+              )}
+            </motion.span>
+          </AnimatePresence>
+        </motion.button>
 
-      {/* dark / light map toggle */}
-      <button
-        onClick={toggleTheme}
-        title={theme === "dark" ? "Switch to light map" : "Switch to dark map"}
-        aria-label="Toggle map theme"
-        className="absolute right-[19.5rem] top-4 z-30 grid h-10 w-10 place-items-center rounded-xl border border-white/12 bg-ink/85 text-white/75 shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl transition hover:border-lime/60 hover:text-lime"
-      >
-        {theme === "dark" ? (
-          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-          </svg>
+        <PlaceSearch
+          onGo={(center, name) =>
+            cinematicFly({ center, zoom: 13.5, pitch: 45, bearing: 0, speed: 1.7, curve: 1.5 }, name)
+          }
+        />
+      </div>
+
+      {/* travel overlay: destination banner + warp pulse while the camera flies */}
+      <AnimatePresence>
+        {travel && (
+          <>
+            <motion.div
+              key="warp"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0.15, 0.4, 0.15] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+              className="pointer-events-none absolute inset-0 z-20"
+              style={{ background: "radial-gradient(75% 60% at 50% 50%, transparent 58%, rgba(124,92,255,0.35) 100%)" }}
+            />
+            <motion.div
+              key="banner"
+              initial={{ y: -28, opacity: 0, x: "-50%" }}
+              animate={{ y: 0, opacity: 1, x: "-50%" }}
+              exit={{ y: -20, opacity: 0, x: "-50%" }}
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute left-1/2 top-5 z-30 flex items-center gap-3 rounded-full border border-white/12 bg-ink/85 py-2.5 pl-4 pr-5 shadow-[0_20px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+            >
+              <motion.svg
+                animate={{ x: [0, 5, 0], y: [0, -3, 0] }}
+                transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
+                viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#c3ef3e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              >
+                <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z" />
+              </motion.svg>
+              <span className="whitespace-nowrap text-xs font-medium text-white/85">
+                Flying to <strong className="font-semibold text-white">{travel}</strong>
+              </span>
+              <span className="relative h-1 w-16 overflow-hidden rounded-full bg-white/10">
+                <motion.span
+                  initial={{ x: "-100%" }}
+                  animate={{ x: "100%" }}
+                  transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut" }}
+                  className="absolute inset-y-0 w-1/2 rounded-full bg-gradient-to-r from-violet to-lime"
+                />
+              </span>
+            </motion.div>
+          </>
         )}
-      </button>
+      </AnimatePresence>
 
       {/* soft vignette so the map sinks into the UI (lighter frame on the light map) */}
       <div
