@@ -1,8 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { MAP_STYLE, LANDMARKS, BOOK_PINS, pinFor, landmarkCount } from "../lib/geo";
+import { styleUrl, LANDMARKS, BOOK_PINS, pinFor, landmarkCount } from "../lib/geo";
 import PlaceSearch from "./PlaceSearch";
+
+// real 3D buildings — must be re-added after every setStyle() (style switches wipe custom layers)
+function add3dBuildings(map, theme) {
+  try {
+    if (map.getLayer("devx-3d-buildings")) map.removeLayer("devx-3d-buildings");
+    const layers = map.getStyle().layers;
+    const labelId = layers.find((l) => l.type === "symbol" && l.layout?.["text-field"])?.id;
+    map.addLayer(
+      {
+        id: "devx-3d-buildings",
+        source: "openmaptiles",
+        "source-layer": "building",
+        type: "fill-extrusion",
+        minzoom: 14,
+        paint: {
+          "fill-extrusion-color": theme === "light" ? "#d9d3c7" : "#3a3648",
+          "fill-extrusion-height": ["coalesce", ["get", "render_height"], ["get", "height"], 8],
+          "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+          "fill-extrusion-opacity": 0.82,
+        },
+      },
+      labelId
+    );
+  } catch { /* style variations — non-fatal */ }
+}
 
 /**
  * The DevX world — a real, live MapLibre + MapTiler map (dark streets style)
@@ -47,12 +72,25 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
   const wrap = useRef(null);
   const mapRef = useRef(null);
   const [hint, setHint] = useState("Scroll to zoom · Drag to pan · Right-drag to tilt");
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("siddlib.mapTheme") || "dark"; } catch { return "dark"; }
+  });
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    try { localStorage.setItem("siddlib.mapTheme", next); } catch { /* ignore */ }
+    const map = mapRef.current;
+    if (!map) return;
+    map.setStyle(styleUrl(next));
+    map.once("style.load", () => add3dBuildings(map, next));
+  };
 
   // ---- init once ----
   useEffect(() => {
     const map = new maplibregl.Map({
       container: wrap.current,
-      style: MAP_STYLE,
+      style: styleUrl(theme),
       center: [30, 25],
       zoom: 1.6,
       pitch: 0,
@@ -109,29 +147,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     });
 
     map.on("load", () => {
-      // real 3D buildings (skip if the style already ships one)
-      try {
-        if (!map.getLayer("building-3d") && !map.getLayer("Building 3D")) {
-          const layers = map.getStyle().layers;
-          const labelId = layers.find((l) => l.type === "symbol" && l.layout?.["text-field"])?.id;
-          map.addLayer(
-            {
-              id: "devx-3d-buildings",
-              source: "openmaptiles",
-              "source-layer": "building",
-              type: "fill-extrusion",
-              minzoom: 14,
-              paint: {
-                "fill-extrusion-color": "#3a3648",
-                "fill-extrusion-height": ["coalesce", ["get", "render_height"], ["get", "height"], 8],
-                "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
-                "fill-extrusion-opacity": 0.82,
-              },
-            },
-            labelId
-          );
-        }
-      } catch { /* style variations — non-fatal */ }
+      add3dBuildings(map, localStorage.getItem("siddlib.mapTheme") || "dark");
 
       // intro: fly to the last-read book's city, else a gentle world spin-in
       const last = Number(localStorage.getItem("siddlib.lastBook"));
@@ -185,9 +201,39 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
           mapRef.current?.flyTo({ center, zoom: 13.5, pitch: 45, bearing: 0, speed: 1.7, curve: 1.5, essential: true })
         }
       />
-      {/* soft vignette so the map sinks into the UI */}
-      <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_140px_50px_rgba(7,6,13,0.55)]" />
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-ink/50 to-transparent" />
+
+      {/* dark / light map toggle */}
+      <button
+        onClick={toggleTheme}
+        title={theme === "dark" ? "Switch to light map" : "Switch to dark map"}
+        aria-label="Toggle map theme"
+        className="absolute right-[19.5rem] top-4 z-30 grid h-10 w-10 place-items-center rounded-xl border border-white/12 bg-ink/85 text-white/75 shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl transition hover:border-lime/60 hover:text-lime"
+      >
+        {theme === "dark" ? (
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+          </svg>
+        )}
+      </button>
+
+      {/* soft vignette so the map sinks into the UI (lighter frame on the light map) */}
+      <div
+        className={`pointer-events-none absolute inset-0 ${
+          theme === "dark"
+            ? "shadow-[inset_0_0_140px_50px_rgba(7,6,13,0.55)]"
+            : "shadow-[inset_0_0_120px_40px_rgba(30,28,45,0.16)]"
+        }`}
+      />
+      <div
+        className={`pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b to-transparent ${
+          theme === "dark" ? "from-ink/50" : "from-ink/15"
+        }`}
+      />
 
       <div className="pointer-events-none absolute bottom-5 left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-ink/80 px-4 py-2 text-xs font-medium text-white/70 shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
         <span className="h-1.5 w-1.5 rounded-full bg-lime shadow-[0_0_8px_2px_rgba(195,239,62,0.6)]" />

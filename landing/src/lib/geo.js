@@ -8,7 +8,9 @@ import { books, floatingBooks } from "../data/books";
 // Client-side MapTiler key — restrict it to your domain in the MapTiler
 // dashboard (Account → Keys → Allowed HTTP origins) before deploying.
 export const MAPTILER_KEY = "MSles60yjPF9GIPHp8Dt";
-export const MAP_STYLE = `https://api.maptiler.com/maps/streets-v4-dark/style.json?key=${MAPTILER_KEY}`;
+export const styleUrl = (theme) =>
+  `https://api.maptiler.com/maps/${theme === "light" ? "streets-v4" : "streets-v4-dark"}/style.json?key=${MAPTILER_KEY}`;
+export const MAP_STYLE = styleUrl("dark");
 
 // One or more landmarks per category. at = [lng, lat]
 export const LANDMARKS = [
