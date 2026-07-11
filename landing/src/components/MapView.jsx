@@ -62,24 +62,51 @@ const WORLD_HUBS = [
   [151.18, -33.95], // Sydney
 ];
 
-function addPlaneIcon(map) {
-  if (map.hasImage("devx-live-plane")) return;
-  const size = 44;
-  const c = document.createElement("canvas");
-  c.width = c.height = size;
-  const ctx = c.getContext("2d");
-  ctx.scale(size / 24, size / 24);
-  const path = new Path2D("M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z");
-  ctx.fillStyle = "#8fd3ff";
-  ctx.strokeStyle = "rgba(10,12,20,0.9)";
-  ctx.lineWidth = 0.8;
-  ctx.fill(path);
-  ctx.stroke(path);
-  map.addImage("devx-live-plane", ctx.getImageData(0, 0, size, size));
+// altitude → color, like flight-tracker sites (warm = low, cool/purple = high)
+const ALT_COLORS = [
+  { max: 0, color: "#9aa0ae" },        // on the ground
+  { max: 4000, color: "#ff9d42" },
+  { max: 10000, color: "#ffd23e" },
+  { max: 18000, color: "#a4e34d" },
+  { max: 26000, color: "#3ddc97" },
+  { max: 33000, color: "#4fc3f7" },
+  { max: 40000, color: "#7c9bff" },
+  { max: Infinity, color: "#c77dff" },
+];
+const altBucket = (alt) => {
+  if (alt === "ground" || alt == null || alt === "") return 0;
+  const n = Number(alt);
+  for (let i = 1; i < ALT_COLORS.length; i++) if (n <= ALT_COLORS[i].max) return i;
+  return ALT_COLORS.length - 1;
+};
+
+function addPlaneIcons(map) {
+  const path = "M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z";
+  ALT_COLORS.forEach((b, i) => {
+    if (map.hasImage(`devx-plane-${i}`)) return;
+    const size = 44;
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const ctx = c.getContext("2d");
+    ctx.scale(size / 24, size / 24);
+    // soft halo in the bucket colour so planes read against any map
+    const g = ctx.createRadialGradient(12, 12, 2, 12, 12, 11);
+    g.addColorStop(0, b.color + "66");
+    g.addColorStop(1, b.color + "00");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 24, 24);
+    const p = new Path2D(path);
+    ctx.fillStyle = b.color;
+    ctx.strokeStyle = "rgba(10,12,20,0.9)";
+    ctx.lineWidth = 0.9;
+    ctx.fill(p);
+    ctx.stroke(p);
+    map.addImage(`devx-plane-${i}`, ctx.getImageData(0, 0, size, size));
+  });
 }
 
 function ensureTrafficLayer(map) {
-  addPlaneIcon(map);
+  addPlaneIcons(map);
   if (!map.getSource("devx-traffic")) {
     map.addSource("devx-traffic", { type: "geojson", data: EMPTY_FC });
     map.addLayer({
@@ -87,8 +114,8 @@ function ensureTrafficLayer(map) {
       source: "devx-traffic",
       type: "symbol",
       layout: {
-        "icon-image": "devx-live-plane",
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.3, 6, 0.5, 11, 0.65],
+        "icon-image": ["concat", "devx-plane-", ["get", "altBucket"]],
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.38, 6, 0.58, 11, 0.72],
         "icon-rotate": ["get", "track"],
         "icon-rotation-alignment": "map",
         "icon-allow-overlap": true,
@@ -98,6 +125,34 @@ function ensureTrafficLayer(map) {
     });
   }
 }
+
+// every useful field the API gives us, for the details panel
+const acProps = (a) => ({
+  hex: a.hex || "",
+  callsign: (a.flight || "").trim() || a.r || a.hex || "",
+  reg: a.r || "",
+  t: a.t || "",
+  desc: a.desc || "",
+  squawk: a.squawk || "",
+  cat: a.category || "",
+  alt: a.alt_baro ?? "",
+  altGeom: a.alt_geom ?? "",
+  gs: Math.round(a.gs || 0),
+  track: a.track ?? a.true_heading ?? 0,
+  vr: a.baro_rate ?? a.geom_rate ?? "",
+  lat: a.lat,
+  lon: a.lon,
+  src: a.type || "",
+  rssi: a.rssi ?? "",
+  seen: a.seen ?? "",
+  altBucket: altBucket(a.alt_baro),
+});
+
+// live position of one aircraft (for path tracking)
+const HEX_SOURCES = [
+  (hex) => `https://api.airplanes.live/v2/hex/${hex}`,
+  (hex) => "https://corsproxy.io/?url=" + encodeURIComponent(`https://api.adsb.lol/v2/hex/${hex}`),
+];
 
 function ensureFlightLayers(map) {
   if (!map.getSource("devx-flight")) {
@@ -195,6 +250,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
   });
   const [travel, setTravel] = useState(null); // destination label while the camera flies
   const [liveFlights, setLiveFlights] = useState(true); // real air traffic overlay
+  const [selPlane, setSelPlane] = useState(null); // { hex, props, at } — flight details panel
   const flightRef = useRef(null); // cleanup fn of the active plane animation
 
   // Plane rides the camera: on every camera move it sits at the screen centre
@@ -354,19 +410,12 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
       }
     });
 
-    // click a live plane → flight details popup
+    // click a live plane → flight details panel + live path tracking
     map.on("click", (e) => {
       let f;
       try { f = map.queryRenderedFeatures(e.point, { layers: ["devx-traffic"] })[0]; } catch { return; }
       if (!f) return;
-      const p = f.properties;
-      new maplibregl.Popup({ closeButton: false, offset: 14, className: "traffic-popup" })
-        .setLngLat(f.geometry.coordinates)
-        .setHTML(
-          `<strong>${p.callsign || "Unknown"}</strong>${p.t ? ` · ${p.t}` : ""}<br/>
-           <span>${p.alt === "ground" ? "on the ground" : `${Number(p.alt).toLocaleString()} ft`} · ${p.gs} kts</span>`
-        )
-        .addTo(map);
+      setSelPlane({ hex: f.properties.hex, props: f.properties, at: f.geometry.coordinates });
     });
 
     return () => map.remove();
@@ -387,13 +436,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     const clear = () => { try { map.getSource("devx-traffic")?.setData(EMPTY_FC); } catch { /* ignore */ } };
     const acToFeature = (a) => ({
       type: "Feature",
-      properties: {
-        callsign: (a.flight || a.r || a.hex || "").trim(),
-        track: a.track ?? a.true_heading ?? 0,
-        alt: a.alt_baro ?? "",
-        gs: Math.round(a.gs || 0),
-        t: a.t || "",
-      },
+      properties: acProps(a),
       geometry: { type: "Point", coordinates: [a.lon, a.lat] },
     });
     const fetchPoint = async (lat, lng) => {
@@ -424,8 +467,17 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     const worldSweep = async () => {
       if (sweeping) return;
       sweeping = true;
-      for (const [lng, lat] of WORLD_HUBS) {
-        if (stop || !liveFlights || document.hidden || map.getZoom() >= TRAFFIC_ZOOM) break;
+      // nearest hubs first → planes around the user's view appear within seconds
+      const c = map.getCenter();
+      const hubs = [...WORLD_HUBS].sort(
+        (a, b) => haversineKm([c.lng, c.lat], a) - haversineKm([c.lng, c.lat], b)
+      );
+      let completed = true;
+      for (const [lng, lat] of hubs) {
+        if (stop || !liveFlights || document.hidden || map.getZoom() >= TRAFFIC_ZOOM) {
+          completed = false; // aborted — do NOT stamp lastSweep, so the next tick resweeps
+          break;
+        }
         const ac = await fetchPoint(lat, lng);
         const now = Date.now();
         ac.forEach((a) => {
@@ -436,7 +488,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
         await new Promise((r) => setTimeout(r, 1050)); // ~1 req/s — polite to the API
       }
       sweeping = false;
-      lastSweep = Date.now();
+      if (completed) lastSweep = Date.now();
     };
 
     const tick = () => {
@@ -451,6 +503,81 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     if (map.isStyleLoaded()) tick(); else map.once("load", tick);
     return () => { stop = true; clearInterval(iv); map.off("moveend", tick); clear(); };
   }, [liveFlights]);
+
+  // ---- selected flight: poll its live position, draw the growing path + ring ----
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !selPlane) return;
+    const hex = selPlane.hex;
+    let stop = false;
+    const trail = [selPlane.at.slice()];
+
+    const ensureSelLayers = () => {
+      if (!map.getSource("devx-sel-trail")) {
+        map.addSource("devx-sel-trail", { type: "geojson", data: EMPTY_LINE });
+        map.addLayer({
+          id: "devx-sel-trail-glow", source: "devx-sel-trail", type: "line",
+          paint: { "line-color": "#c3ef3e", "line-width": 7, "line-opacity": 0.2, "line-blur": 4 },
+        });
+        map.addLayer({
+          id: "devx-sel-trail", source: "devx-sel-trail", type: "line",
+          paint: { "line-color": "#c3ef3e", "line-width": 2.4, "line-opacity": 0.9 },
+        });
+      }
+      if (!map.getSource("devx-sel-pt")) {
+        map.addSource("devx-sel-pt", { type: "geojson", data: EMPTY_FC });
+        map.addLayer({
+          id: "devx-sel-ring", source: "devx-sel-pt", type: "circle",
+          paint: {
+            "circle-radius": 17,
+            "circle-color": "rgba(195,239,62,0.10)",
+            "circle-stroke-color": "#c3ef3e",
+            "circle-stroke-width": 2,
+          },
+        });
+      }
+    };
+    const draw = (coords) => {
+      try {
+        ensureSelLayers();
+        map.getSource("devx-sel-trail")?.setData({ type: "Feature", geometry: { type: "LineString", coordinates: trail } });
+        map.getSource("devx-sel-pt")?.setData({
+          type: "FeatureCollection",
+          features: [{ type: "Feature", geometry: { type: "Point", coordinates: coords } }],
+        });
+      } catch { /* style mid-switch */ }
+    };
+    draw(trail[0]);
+
+    const poll = async () => {
+      if (stop) return;
+      for (const src of HEX_SOURCES) {
+        try {
+          const r = await fetch(src(hex));
+          if (!r.ok) continue;
+          const a = ((await r.json()).ac || [])[0];
+          if (a && a.lat != null) {
+            const c = [a.lon, a.lat];
+            if (haversineKm(trail[trail.length - 1], c) > 0.05) trail.push(c);
+            draw(c);
+            setSelPlane((s) => (s && s.hex === hex ? { ...s, props: acProps(a), at: c } : s));
+          }
+          return;
+        } catch { /* next source */ }
+      }
+    };
+    const iv = setInterval(poll, 4000);
+    poll();
+    return () => {
+      stop = true;
+      clearInterval(iv);
+      try {
+        map.getSource("devx-sel-trail")?.setData(EMPTY_LINE);
+        map.getSource("devx-sel-pt")?.setData(EMPTY_FC);
+      } catch { /* ignore */ }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selPlane?.hex]);
 
   // ---- fly-to-book (sidebar / marker pick) ----
   useEffect(() => {
@@ -527,6 +654,85 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
           }
         />
       </div>
+
+      {/* selected flight details panel (adsb.lol style) */}
+      <AnimatePresence>
+        {selPlane && (
+          <motion.aside
+            key={selPlane.hex}
+            initial={{ x: 40, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 40, opacity: 0 }}
+            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute right-4 top-[4.5rem] z-30 w-72 overflow-hidden rounded-2xl border border-white/12 bg-ink/90 shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-white/10 px-4 py-3">
+              <div className="min-w-0">
+                <p className="truncate font-display text-lg font-semibold leading-tight">
+                  {selPlane.props.callsign || "Unknown"}
+                </p>
+                <p className="text-[10px] uppercase tracking-wider text-white/40">
+                  hex {selPlane.props.hex} {selPlane.props.reg && `· ${selPlane.props.reg}`}
+                </p>
+              </div>
+              <span
+                className="mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold text-ink"
+                style={{ background: ALT_COLORS[Number(selPlane.props.altBucket) || 0].color }}
+              >
+                {selPlane.props.alt === "ground" ? "GROUND" : `${Number(selPlane.props.alt || 0).toLocaleString()} ft`}
+              </span>
+              <button
+                onClick={() => setSelPlane(null)}
+                aria-label="Close flight details"
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/5 text-white/60 hover:text-white"
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {(selPlane.props.t || selPlane.props.desc) && (
+              <p className="border-b border-white/10 px-4 py-2 text-xs text-white/70">
+                <span className="font-semibold text-white">{selPlane.props.t}</span>
+                {selPlane.props.desc && <span className="text-white/50"> — {selPlane.props.desc}</span>}
+              </p>
+            )}
+
+            {[
+              ["SPATIAL", [
+                ["Ground speed", selPlane.props.gs ? `${selPlane.props.gs} kts` : "—"],
+                ["Baro altitude", selPlane.props.alt === "ground" ? "on ground" : selPlane.props.alt ? `${Number(selPlane.props.alt).toLocaleString()} ft` : "—"],
+                ["WGS84 altitude", selPlane.props.altGeom ? `${Number(selPlane.props.altGeom).toLocaleString()} ft` : "—"],
+                ["Vertical rate", selPlane.props.vr !== "" ? `${selPlane.props.vr} ft/min` : "—"],
+                ["Track", `${Math.round(selPlane.props.track)}°`],
+                ["Position", selPlane.props.lat != null ? `${Number(selPlane.props.lat).toFixed(3)}°, ${Number(selPlane.props.lon).toFixed(3)}°` : "—"],
+              ]],
+              ["AIRCRAFT · SIGNAL", [
+                ["Squawk", selPlane.props.squawk || "—"],
+                ["Category", selPlane.props.cat || "—"],
+                ["Source", (selPlane.props.src || "").replace("_", " ").toUpperCase() || "—"],
+                ["RSSI", selPlane.props.rssi !== "" ? `${selPlane.props.rssi} dBFS` : "—"],
+                ["Last seen", selPlane.props.seen !== "" ? `${selPlane.props.seen}s ago` : "—"],
+              ]],
+            ].map(([title, rows]) => (
+              <div key={title} className="px-4 py-2.5">
+                <p className="pb-1 text-[9px] font-bold uppercase tracking-[0.18em] text-lime/80">{title}</p>
+                {rows.map(([k, v]) => (
+                  <div key={k} className="flex items-baseline justify-between gap-3 py-[3px]">
+                    <span className="text-[11px] text-white/45">{k}</span>
+                    <span className="text-right text-[11px] font-medium text-white/90">{v}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+
+            <p className="border-t border-white/10 px-4 py-2 text-[10px] text-white/35">
+              ● Live — path traces on the map while this panel is open
+            </p>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
       {/* travel overlay: destination banner + warp pulse while the camera flies */}
       <AnimatePresence>
