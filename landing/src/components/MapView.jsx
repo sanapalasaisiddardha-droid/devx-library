@@ -149,29 +149,36 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     map.on("load", () => {
       add3dBuildings(map, localStorage.getItem("siddlib.mapTheme") || "dark");
 
-      // intro: fly to the last-read book's city, else a gentle world spin-in
-      const last = Number(localStorage.getItem("siddlib.lastBook"));
-      const pin = pinFor(last);
-      if (pin) {
-        map.flyTo({ center: pin.lngLat, zoom: 13.2, pitch: 50, bearing: -12, speed: 0.9, curve: 1.6 });
-      } else {
-        map.flyTo({ center: [10, 30], zoom: 2.2, speed: 0.4 });
-      }
+      // Landing: zoom STRAIGHT into the visitor's location. The world view
+      // holds while the permission prompt is up; on grant we dive in. Only a
+      // denial / timeout falls back to the last-read book (or world view).
+      const fallbackIntro = () => {
+        const last = Number(localStorage.getItem("siddlib.lastBook"));
+        const pin = pinFor(last);
+        if (pin) map.flyTo({ center: pin.lngLat, zoom: 13.2, pitch: 50, bearing: -12, speed: 0.9, curve: 1.6 });
+        else map.flyTo({ center: [10, 30], zoom: 2.2, speed: 0.4 });
+      };
+      const flyHome = (pos) => {
+        const here = [pos.coords.longitude, pos.coords.latitude];
+        const el = document.createElement("div");
+        el.className = "you-pin";
+        el.title = "You are here";
+        new maplibregl.Marker({ element: el }).setLngLat(here).addTo(map);
+        map.flyTo({ center: here, zoom: 12, pitch: 45, bearing: 0, speed: 1.15, curve: 1.7, essential: true });
+      };
 
-      // ask for the visitor's location — when granted, fly home & drop a pin
       if (navigator.geolocation) {
+        let fellBack = false;
+        const fallbackOnce = () => { if (!fellBack) { fellBack = true; fallbackIntro(); } };
+        // safety net: user ignores the prompt → don't leave them staring at space
+        const timer = setTimeout(fallbackOnce, 12000);
         navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            const here = [pos.coords.longitude, pos.coords.latitude];
-            const el = document.createElement("div");
-            el.className = "you-pin";
-            el.title = "You are here";
-            new maplibregl.Marker({ element: el }).setLngLat(here).addTo(map);
-            map.flyTo({ center: here, zoom: 10.5, pitch: 40, bearing: 0, speed: 1.1, curve: 1.7, essential: true });
-          },
-          () => { /* denied/unavailable → keep the intro view */ },
-          { timeout: 8000, maximumAge: 600000 }
+          (pos) => { clearTimeout(timer); flyHome(pos); }, // grant (even late) → go home
+          () => { clearTimeout(timer); fallbackOnce(); },
+          { timeout: 10000, maximumAge: 600000 }
         );
+      } else {
+        fallbackIntro();
       }
     });
 
