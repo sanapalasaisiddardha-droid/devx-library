@@ -18,6 +18,7 @@ const item = {
 export default function Sidebar({ onPickBook }) {
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
+  const [suppressed, setSuppressed] = useState(false); // user clicked close while hovering
   const [query, setQuery] = useState("");
   const [openCat, setOpenCat] = useState(null);
 
@@ -38,7 +39,12 @@ export default function Sidebar({ onPickBook }) {
       )
     : null;
 
-  const expanded = open || pinned;
+  const expanded = (open && !suppressed) || pinned;
+  // click = a real open/close toggle (pin locks it open past hover)
+  const toggle = () => {
+    if (expanded) { setPinned(false); setSuppressed(true); }
+    else { setPinned(true); setSuppressed(false); }
+  };
 
   const BookRow = ({ b }) => (
     <motion.button
@@ -75,7 +81,7 @@ export default function Sidebar({ onPickBook }) {
     <div
       className="fixed left-0 top-0 z-40 flex h-full"
       onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseLeave={() => { setOpen(false); setSuppressed(false); }}
     >
       {/* rail */}
       <div className="flex h-full w-14 flex-col items-center border-r border-white/10 bg-ink/90 py-4 shadow-[8px_0_30px_-12px_rgba(0,0,0,0.6)] backdrop-blur-xl">
@@ -90,11 +96,12 @@ export default function Sidebar({ onPickBook }) {
         </motion.span>
 
         <motion.button
-          onClick={() => setPinned((v) => !v)}
+          onClick={toggle}
           whileTap={{ scale: 0.9 }}
-          aria-label={pinned ? "Unpin sidebar" : "Pin sidebar"}
+          title={expanded ? "Close the library panel" : "Open the library panel"}
+          aria-label={expanded ? "Close sidebar" : "Open sidebar"}
           className={`mt-6 grid h-9 w-9 place-items-center rounded-xl border transition-all duration-300 ${
-            pinned
+            expanded
               ? "border-transparent bg-lime text-ink shadow-[0_8px_20px_-8px_rgba(195,239,62,0.8)]"
               : "border-white/10 bg-white/5 text-white/60 hover:border-white/25 hover:text-white"
           }`}
@@ -108,7 +115,25 @@ export default function Sidebar({ onPickBook }) {
           </motion.svg>
         </motion.button>
 
-        <div className="mt-auto -rotate-90 whitespace-nowrap font-display text-xs font-semibold tracking-[0.3em] text-white/25">
+        {/* collapsed-state hint: what's inside + how to open it */}
+        <div className="grid flex-1 place-items-center">
+          <AnimatePresence>
+            {!expanded && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="-rotate-90 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40"
+              >
+                <span className="text-lime">{stats.resources} books</span>
+                <span className="mx-2 text-white/20">·</span>
+                hover to browse
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        <div className="-rotate-90 whitespace-nowrap pb-2 font-display text-xs font-semibold tracking-[0.3em] text-white/25">
           DEVX
         </div>
       </div>
