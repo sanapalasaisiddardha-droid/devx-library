@@ -84,15 +84,12 @@ export default function Sidebar({ onPickBook }) {
       onMouseLeave={() => { setOpen(false); setSuppressed(false); }}
     >
       {/* rail */}
-      <div className="flex h-full w-14 flex-col items-center border-r border-white/10 bg-ink/90 py-4 shadow-[8px_0_30px_-12px_rgba(0,0,0,0.6)] backdrop-blur-xl">
+      <div className="flex h-full w-20 flex-col items-center border-r border-white/10 bg-ink/90 py-5 shadow-[8px_0_30px_-12px_rgba(0,0,0,0.6)] backdrop-blur-xl">
         <motion.span
-          whileHover={{ scale: 1.08, rotate: -4 }}
-          className="grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-gradient-to-br from-violet to-[#38bdf8] shadow-[0_10px_24px_-8px_rgba(124,92,255,0.8)]"
+          whileHover={{ scale: 1.06 }}
+          className="cursor-default select-none font-display text-lg font-semibold tracking-tight"
         >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-          </svg>
+          Dev<span className="text-gradient">X</span>
         </motion.span>
 
         <motion.button
@@ -131,10 +128,6 @@ export default function Sidebar({ onPickBook }) {
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
-
-        <div className="-rotate-90 whitespace-nowrap pb-2 font-display text-xs font-semibold tracking-[0.3em] text-white/25">
-          DEVX
         </div>
       </div>
 
