@@ -22,6 +22,54 @@ function bearingDeg(a, b) {
 }
 
 const EMPTY_LINE = { type: "Feature", geometry: { type: "LineString", coordinates: [] } };
+const EMPTY_FC = { type: "FeatureCollection", features: [] };
+
+/* ---------- live air traffic (community ADS-B: airplanes.live + adsb.lol) ---------- */
+const TRAFFIC_ZOOM = 5.5; // fetch only at region scale — the API is radius-based
+// tried in order — airplanes.live sends CORS natively; adsb.lol needs a relay
+const TRAFFIC_SOURCES = [
+  (lat, lng) => `https://api.airplanes.live/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250`,
+  (lat, lng) =>
+    "https://corsproxy.io/?url=" +
+    encodeURIComponent(`https://api.adsb.lol/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250`),
+];
+
+function addPlaneIcon(map) {
+  if (map.hasImage("devx-live-plane")) return;
+  const size = 44;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+  ctx.scale(size / 24, size / 24);
+  const path = new Path2D("M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z");
+  ctx.fillStyle = "#8fd3ff";
+  ctx.strokeStyle = "rgba(10,12,20,0.9)";
+  ctx.lineWidth = 0.8;
+  ctx.fill(path);
+  ctx.stroke(path);
+  map.addImage("devx-live-plane", ctx.getImageData(0, 0, size, size));
+}
+
+function ensureTrafficLayer(map) {
+  addPlaneIcon(map);
+  if (!map.getSource("devx-traffic")) {
+    map.addSource("devx-traffic", { type: "geojson", data: EMPTY_FC });
+    map.addLayer({
+      id: "devx-traffic",
+      source: "devx-traffic",
+      type: "symbol",
+      layout: {
+        "icon-image": "devx-live-plane",
+        "icon-size": 0.5,
+        "icon-rotate": ["get", "track"],
+        "icon-rotation-alignment": "map",
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+      },
+      paint: { "icon-opacity": 0.95 },
+    });
+  }
+}
 
 function ensureFlightLayers(map) {
   if (!map.getSource("devx-flight")) {
@@ -118,6 +166,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
     try { return localStorage.getItem("siddlib.mapTheme") || "dark"; } catch { return "dark"; }
   });
   const [travel, setTravel] = useState(null); // destination label while the camera flies
+  const [liveFlights, setLiveFlights] = useState(true); // real air traffic overlay
   const flightRef = useRef(null); // cleanup fn of the active plane animation
 
   // Plane rides the camera: on every camera move it sits at the screen centre
@@ -188,7 +237,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
       center: [30, 25],
       zoom: 1.6,
       pitch: 0,
-      attributionControl: { compact: true },
+      attributionControl: { compact: true, customAttribution: "Live flights © airplanes.live · adsb.lol" },
     });
     mapRef.current = map;
     window.devxMap = map; // debugging hook
@@ -277,9 +326,67 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
       }
     });
 
+    // click a live plane → flight details popup
+    map.on("click", (e) => {
+      let f;
+      try { f = map.queryRenderedFeatures(e.point, { layers: ["devx-traffic"] })[0]; } catch { return; }
+      if (!f) return;
+      const p = f.properties;
+      new maplibregl.Popup({ closeButton: false, offset: 14, className: "traffic-popup" })
+        .setLngLat(f.geometry.coordinates)
+        .setHTML(
+          `<strong>${p.callsign || "Unknown"}</strong>${p.t ? ` · ${p.t}` : ""}<br/>
+           <span>${p.alt === "ground" ? "on the ground" : `${Number(p.alt).toLocaleString()} ft`} · ${p.gs} kts</span>`
+        )
+        .addTo(map);
+    });
+
     return () => map.remove();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---- live air traffic: fetch nearby aircraft every 10s at region zoom ----
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    let stop = false;
+    const clear = () => { try { map.getSource("devx-traffic")?.setData(EMPTY_FC); } catch { /* ignore */ } };
+    const tick = async () => {
+      if (stop || !liveFlights) return;
+      if (document.hidden || !map.isStyleLoaded() || map.getZoom() < TRAFFIC_ZOOM) { clear(); return; }
+      const c = map.getCenter();
+      try {
+        let d = null;
+        for (const src of TRAFFIC_SOURCES) {
+          try {
+            const r = await fetch(src(c.lat, c.lng));
+            if (r.ok) { d = await r.json(); break; }
+          } catch { /* try the next source */ }
+        }
+        if (!d) return;
+        const features = (d.ac || [])
+          .filter((a) => a.lat != null && a.lon != null)
+          .map((a) => ({
+            type: "Feature",
+            properties: {
+              callsign: (a.flight || a.r || a.hex || "").trim(),
+              track: a.track ?? a.true_heading ?? 0,
+              alt: a.alt_baro ?? "",
+              gs: Math.round(a.gs || 0),
+              t: a.t || "",
+            },
+            geometry: { type: "Point", coordinates: [a.lon, a.lat] },
+          }));
+        if (stop || !liveFlights) return;
+        ensureTrafficLayer(map);
+        map.getSource("devx-traffic")?.setData({ type: "FeatureCollection", features });
+      } catch { /* relay hiccup — try again next tick */ }
+    };
+    const iv = setInterval(tick, 10000);
+    map.on("moveend", tick);
+    if (map.isStyleLoaded()) tick(); else map.once("load", tick);
+    return () => { stop = true; clearInterval(iv); map.off("moveend", tick); clear(); };
+  }, [liveFlights]);
 
   // ---- fly-to-book (sidebar / marker pick) ----
   useEffect(() => {
@@ -331,6 +438,23 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
               )}
             </motion.span>
           </AnimatePresence>
+        </motion.button>
+
+        <motion.button
+          whileHover={{ scale: 1.06 }}
+          whileTap={{ scale: 0.9 }}
+          onClick={() => setLiveFlights((v) => !v)}
+          title={liveFlights ? "Hide live air traffic (adsb.lol)" : "Show live air traffic (adsb.lol)"}
+          aria-label="Toggle live flights"
+          className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl border shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-colors ${
+            liveFlights
+              ? "border-transparent bg-lime text-ink"
+              : "border-white/12 bg-ink/85 text-white/60 hover:border-lime/60 hover:text-lime"
+          }`}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
+          </svg>
         </motion.button>
 
         <PlaceSearch

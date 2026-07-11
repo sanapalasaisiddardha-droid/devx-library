@@ -222,6 +222,26 @@
   color: rgba(255, 255, 255, 0.5);
 }
 
+/* live-flight details popup */
+.traffic-popup .maplibregl-popup-content {
+  background: rgba(15, 13, 22, 0.95);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+.traffic-popup .maplibregl-popup-content span {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+}
+.traffic-popup .maplibregl-popup-tip {
+  border-top-color: rgba(15, 13, 22, 0.95) !important;
+  border-bottom-color: rgba(15, 13, 22, 0.95) !important;
+}
+
 /* maplibre chrome on dark */
 .maplibregl-ctrl-group {
   background: rgba(15, 13, 22, 0.9) !important;

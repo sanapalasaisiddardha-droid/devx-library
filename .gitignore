@@ -46,3 +46,6 @@ landing/geo-shot.mjs
 landing/travel-shot.mjs
 landing/flight-shot.mjs
 landing/flight-shot2.mjs
+landing/cors-test*.mjs
+landing/traffic-shot.mjs
+landing/traffic-diag.mjs
