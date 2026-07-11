@@ -26,13 +26,32 @@ const EMPTY_FC = { type: "FeatureCollection", features: [] };
 
 /* ---------- live air traffic (community ADS-B: airplanes.live + adsb.lol) ---------- */
 const TRAFFIC_ZOOM = 5.5; // above: query around the camera · below: global hub sweep
-// tried in order — airplanes.live sends CORS natively; adsb.lol needs a relay
+// tried in order — airplanes.live sends CORS natively; the others need a relay.
+// A source that fails goes on a 90 s cooldown so one rate-limited feed can't
+// blank the sky; the next source takes over immediately.
+const relay = (u) => "https://corsproxy.io/?url=" + encodeURIComponent(u);
 const TRAFFIC_SOURCES = [
-  (lat, lng) => `https://api.airplanes.live/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250`,
-  (lat, lng) =>
-    "https://corsproxy.io/?url=" +
-    encodeURIComponent(`https://api.adsb.lol/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250`),
+  { key: "ac", url: (lat, lng) => `https://api.airplanes.live/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250` },
+  { key: "ac", url: (lat, lng) => relay(`https://api.adsb.lol/v2/point/${lat.toFixed(3)}/${lng.toFixed(3)}/250`) },
+  { key: "aircraft", url: (lat, lng) => relay(`https://opendata.adsb.fi/api/v2/lat/${lat.toFixed(3)}/lon/${lng.toFixed(3)}/dist/250`) },
 ];
+const srcCooldown = new Array(TRAFFIC_SOURCES.length).fill(0);
+
+// returns the aircraft list, or null when every source is down
+async function fetchTraffic(lat, lng) {
+  for (let i = 0; i < TRAFFIC_SOURCES.length; i++) {
+    if (Date.now() < srcCooldown[i]) continue;
+    const s = TRAFFIC_SOURCES[i];
+    try {
+      const r = await fetch(s.url(lat, lng));
+      if (r.ok) return (await r.json())[s.key] || [];
+      srcCooldown[i] = Date.now() + 90000;
+    } catch {
+      srcCooldown[i] = Date.now() + 90000;
+    }
+  }
+  return null;
+}
 
 // world-sweep sample points: the planet's busiest air corridors, every continent.
 // Each covers a 250 nm radius; queried one per second to respect API limits.
@@ -150,9 +169,19 @@ const acProps = (a) => ({
 
 // live position of one aircraft (for path tracking)
 const HEX_SOURCES = [
-  (hex) => `https://api.airplanes.live/v2/hex/${hex}`,
-  (hex) => "https://corsproxy.io/?url=" + encodeURIComponent(`https://api.adsb.lol/v2/hex/${hex}`),
+  { key: "ac", url: (hex) => `https://api.airplanes.live/v2/hex/${hex}` },
+  { key: "ac", url: (hex) => relay(`https://api.adsb.lol/v2/hex/${hex}`) },
+  { key: "aircraft", url: (hex) => relay(`https://opendata.adsb.fi/api/v2/hex/${hex}`) },
 ];
+async function fetchHex(hex) {
+  for (const s of HEX_SOURCES) {
+    try {
+      const r = await fetch(s.url(hex));
+      if (r.ok) return ((await r.json())[s.key] || [])[0] || null;
+    } catch { /* next source */ }
+  }
+  return null;
+}
 
 function ensureFlightLayers(map) {
   if (!map.getSource("devx-flight")) {
@@ -251,6 +280,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
   const [travel, setTravel] = useState(null); // destination label while the camera flies
   const [liveFlights, setLiveFlights] = useState(true); // real air traffic overlay
   const [selPlane, setSelPlane] = useState(null); // { hex, props, at } — flight details panel
+  const [trafficDown, setTrafficDown] = useState(false); // all flight feeds busy/rate-limited
   const flightRef = useRef(null); // cleanup fn of the active plane animation
 
   // Plane rides the camera: on every camera move it sits at the screen centre
@@ -439,15 +469,6 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
       properties: acProps(a),
       geometry: { type: "Point", coordinates: [a.lon, a.lat] },
     });
-    const fetchPoint = async (lat, lng) => {
-      for (const src of TRAFFIC_SOURCES) {
-        try {
-          const r = await fetch(src(lat, lng));
-          if (r.ok) return (await r.json()).ac || [];
-        } catch { /* try the next source */ }
-      }
-      return [];
-    };
     const setData = (features) => {
       if (stop) return;
       try {
@@ -458,10 +479,11 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
 
     const localTick = async () => {
       const c = map.getCenter();
-      const ac = await fetchPoint(c.lat, c.lng);
-      if (!stop && liveFlights && map.getZoom() >= TRAFFIC_ZOOM) {
-        setData(ac.filter((a) => a.lat != null && a.lon != null).map(acToFeature));
-      }
+      const ac = await fetchTraffic(c.lat, c.lng);
+      if (stop || !liveFlights || map.getZoom() < TRAFFIC_ZOOM) return;
+      if (ac === null) { setTrafficDown(true); return; } // feeds busy — keep what we have
+      setTrafficDown(false);
+      setData(ac.filter((a) => a.lat != null && a.lon != null).map(acToFeature));
     };
 
     const worldSweep = async () => {
@@ -478,7 +500,9 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
           completed = false; // aborted — do NOT stamp lastSweep, so the next tick resweeps
           break;
         }
-        const ac = await fetchPoint(lat, lng);
+        const ac = await fetchTraffic(lat, lng);
+        if (ac === null) { setTrafficDown(true); continue; } // all feeds busy — try next hub later
+        setTrafficDown(false);
         const now = Date.now();
         ac.forEach((a) => {
           if (a.lat != null && a.lon != null && a.hex) worldCache.set(a.hex, { f: acToFeature(a), ts: now });
@@ -551,22 +575,14 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
 
     const poll = async () => {
       if (stop) return;
-      for (const src of HEX_SOURCES) {
-        try {
-          const r = await fetch(src(hex));
-          if (!r.ok) continue;
-          const a = ((await r.json()).ac || [])[0];
-          if (a && a.lat != null) {
-            const c = [a.lon, a.lat];
-            if (haversineKm(trail[trail.length - 1], c) > 0.05) trail.push(c);
-            draw(c);
-            setSelPlane((s) => (s && s.hex === hex ? { ...s, props: acProps(a), at: c } : s));
-          }
-          return;
-        } catch { /* next source */ }
-      }
+      const a = await fetchHex(hex);
+      if (stop || !a || a.lat == null) return;
+      const c = [a.lon, a.lat];
+      if (haversineKm(trail[trail.length - 1], c) > 0.05) trail.push(c);
+      draw(c);
+      setSelPlane((s) => (s && s.hex === hex ? { ...s, props: acProps(a), at: c } : s));
     };
-    const iv = setInterval(poll, 4000);
+    const iv = setInterval(poll, 6000);
     poll();
     return () => {
       stop = true;
@@ -637,7 +653,7 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
           onClick={() => setLiveFlights((v) => !v)}
           title={liveFlights ? "Hide live air traffic (adsb.lol)" : "Show live air traffic (adsb.lol)"}
           aria-label="Toggle live flights"
-          className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl border shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-colors ${
+          className={`relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl border shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-colors ${
             liveFlights
               ? "border-transparent bg-lime text-ink"
               : "border-white/12 bg-ink/85 text-white/60 hover:border-lime/60 hover:text-lime"
@@ -646,6 +662,12 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
           </svg>
+          {liveFlights && trafficDown && (
+            <span
+              className="absolute -right-1 -top-1 h-3 w-3 animate-pulse rounded-full border-2 border-ink bg-amber-400"
+              title="Flight feeds are busy — retrying"
+            />
+          )}
         </motion.button>
 
         <PlaceSearch
@@ -793,8 +815,8 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
       />
 
       <div className="pointer-events-none absolute bottom-5 left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-ink/80 px-4 py-2 text-xs font-medium text-white/70 shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl">
-        <span className="h-1.5 w-1.5 rounded-full bg-lime shadow-[0_0_8px_2px_rgba(195,239,62,0.6)]" />
-        {hint}
+        <span className={`h-1.5 w-1.5 rounded-full ${liveFlights && trafficDown ? "bg-amber-400 shadow-[0_0_8px_2px_rgba(251,191,36,0.6)]" : "bg-lime shadow-[0_0_8px_2px_rgba(195,239,62,0.6)]"}`} />
+        {liveFlights && trafficDown ? "Live flight feeds are busy — retrying automatically…" : hint}
       </div>
     </div>
   );

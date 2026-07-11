@@ -52,3 +52,5 @@ landing/traffic-diag.mjs
 landing/world-traffic.mjs
 landing/india-traffic.mjs
 landing/plane-panel.mjs
+landing/blr-dev.mjs
+landing/blr-live.mjs
