@@ -164,8 +164,8 @@ export default function MapView({ flyTo, onPickBook, onArrived }) {
         el.className = "you-pin";
         el.title = "You are here";
         new maplibregl.Marker({ element: el }).setLngLat(here).addTo(map);
-        // street-level landing — deep enough for the 3D buildings to rise
-        map.flyTo({ center: here, zoom: 15.2, pitch: 58, bearing: -15, speed: 1.25, curve: 1.7, essential: true });
+        // rooftop-level landing — right down among the 3D buildings
+        map.flyTo({ center: here, zoom: 17, pitch: 62, bearing: -20, speed: 1.35, curve: 1.7, essential: true });
       };
 
       if (navigator.geolocation) {
